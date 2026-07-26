@@ -1,9 +1,10 @@
 import sys
+# Parche de compatibilidad para Python 3.13/3.14 en Streamlit Cloud
 try:
     import audioop
 except ImportError:
-    import audioop_lts as audioop
-    sys.modules["audioop"] = audioop
+    import audioop_lts
+    sys.modules["audioop"] = audioop_lts
 
 import streamlit as st
 import asyncio
@@ -15,28 +16,15 @@ import os
 import re
 import io
 from pydub import AudioSegment
-import sys
-import pyaudioop
-sys.modules["audioop"] = pyaudioop
-import streamlit as st
-import asyncio
-import edge_tts
-from ebooklib import epub
-from bs4 import BeautifulSoup
-import pypdf
-import os
-import re
-import io
-from pydub import AudioSegment
 
-# Configuración visual de la app
+# Configuración visual de la aplicación
 st.set_page_config(
     page_title="AudioBook Studio", 
     page_icon="🎙️", 
     layout="centered"
 )
 
-# Estilos CSS Personalizados para una apariencia moderna
+# Estilos CSS para una interfaz moderna y atractiva
 st.markdown("""
     <style>
     .main {
@@ -79,24 +67,27 @@ VOCES = {
     "🇲🇽 México - Jorge (Voz Profunda)": "es-MX-JorgeNeural",
     "🇨🇴 Colombia - Salomé (Suave)": "es-CO-SalomeNeural",
     "🇨🇴 Colombia - Gonzalo (Pausado)": "es-CO-GonzaloNeural",
+    "🇨🇱 Chile - Catalina (Femenino)": "es-CL-CatalinaNeural",
+    "🇨🇱 Chile - Lorenzo (Masculino)": "es-CL-LorenzoNeural",
     "🇪🇸 España - Álvaro (Novela)": "es-ES-AlvaroNeural",
     "🇪🇸 España - Elvira (Cálida)": "es-ES-ElviraNeural",
-    "🇺🇸 EE.UU. - Alonso (Latino Fluido)": "es-US-AlonsoNeural"
+    "🇺🇸 EE.UU. - Alonso (Latino Fluido)": "es-US-AlonsoNeural",
+    "🇺🇸 EE.UU. - Paloma (Latino Femenino)": "es-US-PalomaNeural"
 }
 
-# Limpiador de texto para evitar pausas robóticas
+# Limpiador de texto para evitar pausas robóticas y saltos innecesarios
 def limpiar_texto_para_narracion(texto):
-    # Unir palabras partidas por guion al final de una línea (ej: "na- rración" -> "narración")
+    # Unir palabras partidas por guion al final de una línea
     texto = re.sub(r'(\w+)-\s*\n\s*(\w+)', r'\1\2', texto)
-    # Reemplazar múltiples saltos de línea por un solo punto aparte
+    # Reemplazar múltiples saltos de línea por un punto y espacio
     texto = re.sub(r'\n+', '. ', texto)
-    # Eliminar espacios dobles o raros
+    # Eliminar espacios dobles o repetidos
     texto = re.sub(r'\s+', ' ', texto)
-    # Eliminar caracteres raros que traban la lectura de la IA
+    # Filtrar caracteres raros manteniendo la puntuación básica
     texto = re.sub(r'[^\w\s,.:;?!¡¿"\'—-]', '', texto)
     return texto.strip()
 
-# Interfaz
+# Interfaz de usuario
 st.markdown("<div class='voice-card'>", unsafe_allow_html=True)
 voz_nombre = st.selectbox("🎙️ Elegí la voz del narrador:", list(VOCES.keys()))
 voz_codigo = VOCES[voz_nombre]
@@ -105,8 +96,8 @@ st.markdown("</div>", unsafe_allow_html=True)
 archivo_subido = st.file_uploader("📂 Arrastrá tu libro en formato EPUB o PDF:", type=["epub", "pdf"])
 
 async def generar_audio_fragmento(texto, archivo_salida, voz):
-    # -5% de velocidad para un tono de lectura más natural y menos apresurado
-    communicate = edge_tts.Communicate(texto, voz, rate="-5%")
+    # Ajuste de velocidad (-4%) para un tono de lectura más pausado y humano
+    communicate = edge_tts.Communicate(texto, voz, rate="-4%")
     await communicate.save(archivo_salida)
 
 def extraer_capitulos_epub(bytes_file):
@@ -115,10 +106,10 @@ def extraer_capitulos_epub(bytes_file):
     book = epub.read_epub("temp.epub")
     capitulos = []
     for item in book.get_items():
-        if item.get_type() == 9:
+        if item.get_type() == 9: # Documentos HTML de capítulos
             soup = BeautifulSoup(item.get_content(), 'html.parser')
             texto_limpio = limpiar_texto_para_narracion(soup.get_text())
-            if len(texto_limpio) > 300:
+            if len(texto_limpio) > 300: # Ignorar páginas vacías o breves
                 capitulos.append(texto_limpio)
     if os.path.exists("temp.epub"):
         os.remove("temp.epub")
@@ -132,13 +123,14 @@ def extraer_capitulos_pdf(bytes_file):
         txt = page.extract_text()
         if txt:
             texto_acumulado += " " + txt
-            if len(texto_acumulado) > 4000: # Bloques de lectura de ~10 min
+            if len(texto_acumulado) > 3500: # Agrupar en bloques de lectura
                 capitulos.append(limpiar_texto_para_narracion(texto_acumulado))
                 texto_acumulado = ""
     if texto_acumulado.strip():
         capitulos.append(limpiar_texto_para_narracion(texto_acumulado))
     return capitulos
 
+# Acción de conversión
 if archivo_subido is not None:
     if st.button("✨ Generar Audiolibro Unificado"):
         st.info("Procesando y optimizando el texto del libro...")
@@ -150,46 +142,45 @@ if archivo_subido is not None:
             capitulos = extraer_capitulos_pdf(bytes_data)
             
         if not capitulos:
-            st.error("No se pudo extraer texto utilizable.")
+            st.error("No se pudo extraer texto utilizable del archivo.")
         else:
-            st.success(f"Libro procesado correctamente: {len(capitulos)} capítulos identificados.")
+            st.success(f"Libro procesado correctamente: {len(capitulos)} secciones/capitulos detectados.")
             
             archivos_temporales = []
             barra_progreso = st.progress(0)
             
-            # Generar cada capítulo
+            # Generar el audio de cada sección
             for i, cap_texto in enumerate(capitulos, start=1):
                 nombre_temp = f"temp_cap_{i}.mp3"
-                st.caption(f"🎧 Narrando Capítulo {i} de {len(capitulos)}...")
+                st.caption(f"🎧 Narrando Sección {i} de {len(capitulos)}...")
                 
                 asyncio.run(generar_audio_fragmento(cap_texto, nombre_temp, voz_codigo))
                 archivos_temporales.append(nombre_temp)
                 barra_progreso.progress(i / len(capitulos))
             
-            st.info("Uniendo todos los capítulos en un único archivo MP3...")
+            st.info("Uniendo todas las secciones en un único archivo MP3...")
             
-            # Unir todos los MP3s en uno solo usando Pydub
+            # Concatenar todos los audios individuales con pydub
             audio_completo = AudioSegment.empty()
-            # Silencio breve entre capítulos (1.5 segundos)
-            silencio = AudioSegment.silent(duration=1500)
+            silencio_intermedio = AudioSegment.silent(duration=1200) # 1.2s de silencio entre capítulos
             
             for file in archivos_temporales:
                 segmento = AudioSegment.from_mp3(file)
-                audio_completo += segmento + silencio
-                os.remove(file) # Limpiar archivo individual
+                audio_completo += segmento + silencio_intermedio
+                os.remove(file) # Eliminar fragmento temporal
                 
             nombre_salida = "Audiolibro_Completo.mp3"
             audio_completo.export(nombre_salida, format="mp3", bitrate="128k")
             
-            # Leer el archivo unido para dar la opción de descarga
             with open(nombre_salida, "rb") as f:
                 bytes_mp3 = f.read()
                 
             st.success("🎉 ¡Tu audiolibro está listo!")
             
-            # Reproductor integrado para escuchar directamente en la app
+            # Reproductor para escuchar directo en la web
             st.audio(bytes_mp3, format="audio/mp3")
             
+            # Botón de descarga del archivo unificado
             st.download_button(
                 label="📥 Descargar Audiolibro Completo (.MP3)",
                 data=bytes_mp3,
