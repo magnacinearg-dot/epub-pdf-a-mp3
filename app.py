@@ -1,4 +1,21 @@
 import sys
+try:
+    import audioop
+except ImportError:
+    import audioop_lts as audioop
+    sys.modules["audioop"] = audioop
+
+import streamlit as st
+import asyncio
+import edge_tts
+from ebooklib import epub
+from bs4 import BeautifulSoup
+import pypdf
+import os
+import re
+import io
+from pydub import AudioSegment
+import sys
 import pyaudioop
 sys.modules["audioop"] = pyaudioop
 import streamlit as st
