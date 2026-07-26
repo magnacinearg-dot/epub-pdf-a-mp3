@@ -4,3 +4,5 @@ ebooklib
 beautifulsoup4
 pypdf
 asyncio
+pydub
+eyed3
