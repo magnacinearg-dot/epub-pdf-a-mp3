@@ -5,4 +5,4 @@ beautifulsoup4
 pypdf
 asyncio
 pydub
-eyed3
+pyaudioop
