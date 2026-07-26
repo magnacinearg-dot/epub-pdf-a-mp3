@@ -5,120 +5,177 @@ from ebooklib import epub
 from bs4 import BeautifulSoup
 import pypdf
 import os
-import zipfile
+import re
 import io
+from pydub import AudioSegment
 
-# Configuración de la página
-st.set_page_config(page_title="Convertidor de Libros a MP3", page_icon="🎧", layout="centered")
+# Configuración visual de la app
+st.set_page_config(
+    page_title="AudioBook Studio", 
+    page_icon="🎙️", 
+    layout="centered"
+)
 
-st.title("🎧 Convertidor de EPUB/PDF a MP3")
-st.write("Subí tu libro, elegí una voz natural y descargá tus MP3s organizados por capítulo.")
+# Estilos CSS Personalizados para una apariencia moderna
+st.markdown("""
+    <style>
+    .main {
+        background-color: #0f172a;
+        color: #f8fafc;
+    }
+    .stButton>button {
+        width: 100%;
+        background: linear-gradient(135deg, #6366f1 0%, #4f46e5 100%);
+        color: white;
+        border: none;
+        padding: 12px 24px;
+        border-radius: 10px;
+        font-weight: bold;
+        font-size: 16px;
+        transition: all 0.3s ease;
+    }
+    .stButton>button:hover {
+        transform: translateY(-2px);
+        box-shadow: 0 4px 12px rgba(99, 102, 241, 0.4);
+    }
+    .voice-card {
+        background-color: #1e293b;
+        padding: 15px;
+        border-radius: 10px;
+        border: 1px solid #334155;
+        margin-bottom: 15px;
+    }
+    </style>
+""", unsafe_allow_html=True)
 
-# Catálogo de voces naturales en español (Edge-TTS)
+st.title("🎙️ AudioBook Studio")
+st.caption("Transformá tus libros digitales en audiolibros humanos con un solo clic.")
+
+# Catálogo con las voces más expresivas y naturales de Edge-TTS
 VOCES = {
-    "Argentina - Tomás (Masculino)": "es-AR-TomasNeural",
-    "Argentina - Elena (Femenino)": "es-AR-ElenaNeural",
-    "México - Dalia (Femenino Neutro)": "es-MX-DaliaNeural",
-    "México - Jorge (Masculino Neutro)": "es-MX-JorgeNeural",
-    "Colombia - Salomé (Femenino)": "es-CO-SalomeNeural",
-    "Colombia - Gonzalo (Masculino)": "es-CO-GonzaloNeural",
-    "Chile - Catalina (Femenino)": "es-CL-CatalinaNeural",
-    "Chile - Lorenzo (Masculino)": "es-CL-LorenzoNeural",
-    "España - Elvira (Femenino)": "es-ES-ElviraNeural",
-    "España - Álvaro (Masculino)": "es-ES-AlvaroNeural",
-    "EE.UU. - Paloma (Latino Femenino)": "es-US-PalomaNeural",
-    "EE.UU. - Alonso (Latino Masculino)": "es-US-AlonsoNeural",
+    "🇦🇷 Argentina - Tomás (Narración Cálida)": "es-AR-TomasNeural",
+    "🇦🇷 Argentina - Elena (Expresiva)": "es-AR-ElenaNeural",
+    "🇲🇽 México - Dalia (Neutro / Relato)": "es-MX-DaliaNeural",
+    "🇲🇽 México - Jorge (Voz Profunda)": "es-MX-JorgeNeural",
+    "🇨🇴 Colombia - Salomé (Suave)": "es-CO-SalomeNeural",
+    "🇨🇴 Colombia - Gonzalo (Pausado)": "es-CO-GonzaloNeural",
+    "🇪🇸 España - Álvaro (Novela)": "es-ES-AlvaroNeural",
+    "🇪🇸 España - Elvira (Cálida)": "es-ES-ElviraNeural",
+    "🇺🇸 EE.UU. - Alonso (Latino Fluido)": "es-US-AlonsoNeural"
 }
 
-# Selección de voz e interfaz
-voz_seleccionada_nombre = st.selectbox("Seleccioná la voz para tu audiolibro:", list(VOCES.keys()))
-voz_codigo = VOCES[voz_seleccionada_nombre]
+# Limpiador de texto para evitar pausas robóticas
+def limpiar_texto_para_narracion(texto):
+    # Unir palabras partidas por guion al final de una línea (ej: "na- rración" -> "narración")
+    texto = re.sub(r'(\w+)-\s*\n\s*(\w+)', r'\1\2', texto)
+    # Reemplazar múltiples saltos de línea por un solo punto aparte
+    texto = re.sub(r'\n+', '. ', texto)
+    # Eliminar espacios dobles o raros
+    texto = re.sub(r'\s+', ' ', texto)
+    # Eliminar caracteres raros que traban la lectura de la IA
+    texto = re.sub(r'[^\w\s,.:;?!¡¿"\'—-]', '', texto)
+    return texto.strip()
 
-archivo_subido = st.file_uploader("Cargá tu archivo (EPUB o PDF):", type=["epub", "pdf"])
+# Interfaz
+st.markdown("<div class='voice-card'>", unsafe_allow_html=True)
+voz_nombre = st.selectbox("🎙️ Elegí la voz del narrador:", list(VOCES.keys()))
+voz_codigo = VOCES[voz_nombre]
+st.markdown("</div>", unsafe_allow_html=True)
 
-# Función asíncrona para convertir texto a audio
-async def texto_a_mp3(texto, ruta_salida, voz):
-    communicate = edge_tts.Communicate(texto, voz)
-    await communicate.save(ruta_salida)
+archivo_subido = st.file_uploader("📂 Arrastrá tu libro en formato EPUB o PDF:", type=["epub", "pdf"])
 
-# Extractor de capítulos para EPUB
+async def generar_audio_fragmento(texto, archivo_salida, voz):
+    # -5% de velocidad para un tono de lectura más natural y menos apresurado
+    communicate = edge_tts.Communicate(texto, voz, rate="-5%")
+    await communicate.save(archivo_salida)
+
 def extraer_capitulos_epub(bytes_file):
     with open("temp.epub", "wb") as f:
         f.write(bytes_file)
     book = epub.read_epub("temp.epub")
     capitulos = []
     for item in book.get_items():
-        if item.get_type() == 9: # Documentos HTML internos
+        if item.get_type() == 9:
             soup = BeautifulSoup(item.get_content(), 'html.parser')
-            texto = soup.get_text().strip()
-            if len(texto) > 300: # Filtrar páginas vacías, portadas o créditos
-                capitulos.append(texto)
+            texto_limpio = limpiar_texto_para_narracion(soup.get_text())
+            if len(texto_limpio) > 300:
+                capitulos.append(texto_limpio)
     if os.path.exists("temp.epub"):
         os.remove("temp.epub")
     return capitulos
 
-# Extractor de texto por páginas/secciones para PDF
 def extraer_capitulos_pdf(bytes_file):
     reader = pypdf.PdfReader(io.BytesIO(bytes_file))
     capitulos = []
-    texto_actual = ""
-    for i, page in enumerate(reader.pages):
-        t = page.extract_text()
-        if t:
-            texto_actual += f"\n\n{t}"
-            # Dividir en bloques de aproximadamente 3000 caracteres para simular capítulos
-            if len(texto_actual) > 3000:
-                capitulos.append(texto_actual.strip())
-                texto_actual = ""
-    if texto_actual.strip():
-        capitulos.append(texto_actual.strip())
+    texto_acumulado = ""
+    for page in reader.pages:
+        txt = page.extract_text()
+        if txt:
+            texto_acumulado += " " + txt
+            if len(texto_acumulado) > 4000: # Bloques de lectura de ~10 min
+                capitulos.append(limpiar_texto_para_narracion(texto_acumulado))
+                texto_acumulado = ""
+    if texto_acumulado.strip():
+        capitulos.append(limpiar_texto_para_narracion(texto_acumulado))
     return capitulos
 
-# Botón de procesamiento
 if archivo_subido is not None:
-    if st.button("🚀 Comenzar Conversión a MP3"):
-        st.info("Extrayendo texto y procesando capítulos...")
-        
+    if st.button("✨ Generar Audiolibro Unificado"):
+        st.info("Procesando y optimizando el texto del libro...")
         bytes_data = archivo_subido.read()
-        es_epub = archivo_subido.name.endswith(".epub")
         
-        if es_epub:
+        if archivo_subido.name.endswith(".epub"):
             capitulos = extraer_capitulos_epub(bytes_data)
         else:
             capitulos = extraer_capitulos_pdf(bytes_data)
             
         if not capitulos:
-            st.error("No se pudo extraer texto utilizable del archivo.")
+            st.error("No se pudo extraer texto utilizable.")
         else:
-            st.success(f"Se detectaron {len(capitulos)} capítulos/bloques de lectura.")
+            st.success(f"Libro procesado correctamente: {len(capitulos)} capítulos identificados.")
             
-            archivos_mp3 = []
-            progreso = st.progress(0)
+            archivos_temporales = []
+            barra_progreso = st.progress(0)
             
-            for index, cap_texto in enumerate(capitulos, start=1):
-                nombre_archivo = f"Capitulo_{index:02d}.mp3"
-                st.write(f"🔊 Generando audio: `{nombre_archivo}`...")
+            # Generar cada capítulo
+            for i, cap_texto in enumerate(capitulos, start=1):
+                nombre_temp = f"temp_cap_{i}.mp3"
+                st.caption(f"🎧 Narrando Capítulo {i} de {len(capitulos)}...")
                 
-                # Generar el archivo MP3 temporalmente
-                asyncio.run(texto_a_mp3(cap_texto, nombre_archivo, voz_codigo))
-                archivos_mp3.append(nombre_archivo)
+                asyncio.run(generar_audio_fragmento(cap_texto, nombre_temp, voz_codigo))
+                archivos_temporales.append(nombre_temp)
+                barra_progreso.progress(i / len(capitulos))
+            
+            st.info("Uniendo todos los capítulos en un único archivo MP3...")
+            
+            # Unir todos los MP3s en uno solo usando Pydub
+            audio_completo = AudioSegment.empty()
+            # Silencio breve entre capítulos (1.5 segundos)
+            silencio = AudioSegment.silent(duration=1500)
+            
+            for file in archivos_temporales:
+                segmento = AudioSegment.from_mp3(file)
+                audio_completo += segmento + silencio
+                os.remove(file) # Limpiar archivo individual
                 
-                # Actualizar barra de progreso
-                progreso.progress(index / len(capitulos))
+            nombre_salida = "Audiolibro_Completo.mp3"
+            audio_completo.export(nombre_salida, format="mp3", bitrate="128k")
             
-            # Crear un archivo ZIP con todos los MP3s
-            zip_buffer = io.BytesIO()
-            with zipfile.ZipFile(zip_buffer, "w") as zf:
-                for file_mp3 in archivos_mp3:
-                    zf.write(file_mp3)
-                    os.remove(file_mp3) # Borrar archivo local temporal
-                    
-            st.success("🎉 ¡Audiolibro completado con éxito!")
+            # Leer el archivo unido para dar la opción de descarga
+            with open(nombre_salida, "rb") as f:
+                bytes_mp3 = f.read()
+                
+            st.success("🎉 ¡Tu audiolibro está listo!")
             
-            # Botón de descarga del paquete ZIP
+            # Reproductor integrado para escuchar directamente en la app
+            st.audio(bytes_mp3, format="audio/mp3")
+            
             st.download_button(
-                label="📦 Descargar todos los MP3s (ZIP)",
-                data=zip_buffer.getvalue(),
-                file_name=f"{os.path.splitext(archivo_subido.name)[0]}_MP3.zip",
-                mime="application/zip"
+                label="📥 Descargar Audiolibro Completo (.MP3)",
+                data=bytes_mp3,
+                file_name=f"{os.path.splitext(archivo_subido.name)[0]}_Audiolibro.mp3",
+                mime="audio/mp3"
             )
+            
+            if os.path.exists(nombre_salida):
+                os.remove(nombre_salida)
