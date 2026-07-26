@@ -1,3 +1,6 @@
+import sys
+import pyaudioop
+sys.modules["audioop"] = pyaudioop
 import streamlit as st
 import asyncio
 import edge_tts
