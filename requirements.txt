@@ -1,0 +1,6 @@
+streamlit
+edge-tts
+ebooklib
+beautifulsoup4
+pypdf
+asyncio
